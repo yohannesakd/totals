@@ -262,6 +262,33 @@ class TransactionProvider with ChangeNotifier {
     return dismissals;
   }
 
+  String autoCategorizationFlowForTransaction(Transaction transaction) {
+    return _autoCategorizationService.flowForTransactionType(transaction.type);
+  }
+
+  AutoCategorizationRule? findAutoCategorizationRuleForTransaction(
+    Transaction transaction,
+  ) {
+    final counterparty = resolvePrimaryCounterparty(transaction);
+    if (counterparty == null) return null;
+
+    final normalizedCounterparty =
+        _autoCategorizationService.normalizeCounterparty(counterparty);
+    final flow = autoCategorizationFlowForTransaction(transaction);
+    for (final rule in _autoCategorizationRules) {
+      if (rule.flow != flow) continue;
+      if (rule.normalizedCounterparty != normalizedCounterparty) continue;
+      return rule;
+    }
+    return null;
+  }
+
+  bool canConfigureAutoCategorizationForTransaction(Transaction transaction) {
+    if (!_autoCategorizationEnabled) return false;
+    if (_isSelfTransfer(transaction)) return false;
+    return resolvePrimaryCounterparty(transaction) != null;
+  }
+
   String? getSelfTransferLabel(Transaction transaction) {
     final existing = _selfTransferLabelByReference[transaction.reference];
     if (existing != null) return existing;
@@ -1514,6 +1541,46 @@ class TransactionProvider with ChangeNotifier {
       counterparty: decision.counterparty,
       flow: decision.flow,
     );
+    await _reloadAutoCategorizationState();
+    _dataVersion += 1;
+    notifyListeners();
+  }
+
+  Future<void> syncAutoCategorizationRuleForSelection({
+    required Transaction transaction,
+    required Category category,
+    required bool shouldAutoCategorize,
+  }) async {
+    if (!_autoCategorizationEnabled) return;
+
+    final categoryId = category.id;
+    if (categoryId == null) return;
+
+    final counterparty = resolvePrimaryCounterparty(transaction);
+    if (counterparty == null) return;
+
+    final flow = _autoCategorizationService.normalizeFlow(category.flow);
+    final existingRule = findAutoCategorizationRuleForTransaction(transaction);
+
+    if (shouldAutoCategorize) {
+      if (existingRule != null && existingRule.categoryId == categoryId) {
+        return;
+      }
+      await _autoCategorizationService.upsertRule(
+        counterparty: counterparty,
+        flow: flow,
+        categoryId: categoryId,
+      );
+      await _autoCategorizationService.clearPromptDismissal(
+        counterparty: counterparty,
+        flow: flow,
+      );
+    } else {
+      final existingRuleId = existingRule?.id;
+      if (existingRuleId == null) return;
+      await _autoCategorizationService.deleteRule(existingRuleId);
+    }
+
     await _reloadAutoCategorizationState();
     _dataVersion += 1;
     notifyListeners();
