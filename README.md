@@ -49,6 +49,8 @@
 - Bank of Abyssinia (BOA)
 - Dashen Bank
 - Telebirr
+- Amhara Bank
+- Nib Bank
 
 ### Core Functionality
 
@@ -145,7 +147,7 @@ fvm flutter run --flavor qa
 ### Building for Production
 
 ```bash
-fvm flutter build apk --release --flavor production
+fvm flutter build apk --release --flavor stable
 ```
 
 ## Dependencies
