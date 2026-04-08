@@ -1,5 +1,6 @@
 import 'package:totals/models/sms_pattern.dart';
 import 'package:totals/services/bank_config_service.dart';
+import 'package:totals/utils/transaction_link_utils.dart';
 
 class PatternParser {
   /// Iterates through [patterns] that match the [senderAddress].
@@ -102,7 +103,12 @@ class PatternParser {
             extracted,
             'serviceCharge',
             match,
-            const ['serviceCharge', 'ServiceCharge', 'servicecharge', 'service_charge'],
+            const [
+              'serviceCharge',
+              'ServiceCharge',
+              'servicecharge',
+              'service_charge'
+            ],
           );
           _assignOptionalAmount(
             extracted,
@@ -135,6 +141,16 @@ class PatternParser {
             extracted['time'] = DateTime.now().toIso8601String();
           }
 
+          final transactionLink =
+              TransactionLinkUtils.extractTransactionLinkFromMessage(
+            messageBody: cleanBody,
+            pattern: pattern,
+            reference: extracted['reference']?.toString(),
+          );
+          if (transactionLink != null) {
+            extracted['transactionLink'] = transactionLink;
+          }
+
           print("debug: account ${extracted["accountNumber"]}");
           print("debug: amount ${extracted["amount"]}");
           print("debug: balance ${extracted["currentBalance"]}");
@@ -148,8 +164,8 @@ class PatternParser {
           }
 
           final requiresReference = pattern.refRequired == true;
-          final requiresAccount =
-              pattern.hasAccount == true && match.groupNames.contains('account');
+          final requiresAccount = pattern.hasAccount == true &&
+              match.groupNames.contains('account');
 
           if (extracted['amount'] == null) {
             print(

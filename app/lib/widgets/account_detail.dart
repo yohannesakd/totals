@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'package:totals/models/transaction.dart';
 import 'package:totals/providers/transaction_provider.dart';
+import 'package:totals/services/account_transaction_reparse_service.dart';
 import 'package:totals/utils/text_utils.dart';
 import 'package:totals/widgets/analytics/transactions_list.dart';
 import 'package:totals/widgets/transaction_day_header.dart';
@@ -40,7 +41,10 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
   late DateTime _endDate;
 
   final BankConfigService _bankConfigService = BankConfigService();
+  final AccountTransactionReparseService _reparseService =
+      AccountTransactionReparseService();
   List<Bank> _banks = [];
+  bool _isReparsing = false;
 
   @override
   void initState() {
@@ -117,7 +121,6 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
 
   String _getBankLabel(Transaction transaction) {
     final bankId = transaction.bankId ?? widget.bankId;
-    if (bankId == null) return 'Unknown bank';
     if (bankId == CashConstants.bankId) {
       return CashConstants.bankShortName;
     }
@@ -295,6 +298,52 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
     });
   }
 
+  Future<void> _reparseTransactionsForAccount(
+    TransactionProvider provider,
+    List<Transaction> accountTransactions,
+  ) async {
+    if (_isReparsing) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _isReparsing = true);
+
+    try {
+      final result = await _reparseService.reparseAccountTransactions(
+        bankId: widget.bankId,
+        accountNumber: widget.accountNumber,
+        transactions: accountTransactions,
+      );
+
+      if (result.updatedTransactions > 0) {
+        await provider.loadData();
+      }
+      if (!mounted) return;
+
+      final message = result.errorMessage ??
+          (result.unsupported
+              ? 'Reparse is available only for SMS-backed bank accounts.'
+              : result.permissionDenied
+                  ? 'SMS permission is required to reparse transactions.'
+                  : result.updatedTransactions == 0
+                      ? 'No transactions were updated. '
+                          'Scanned ${result.scannedMessages} bank messages.'
+                      : 'Reparsed ${result.updatedTransactions} transactions. '
+                          'Added ${result.addedReceiptLinks} receipt '
+                          'link${result.addedReceiptLinks == 1 ? '' : 's'}.');
+
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not reparse transactions: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isReparsing = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<TransactionProvider>(builder: (context, provider, child) {
@@ -430,8 +479,9 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
 
       final showIncomeFilter = activeTab != "Debits";
       final showExpenseFilter = activeTab != "Credits";
-      final visibleReferences =
-          visibleTransaction.map((transaction) => transaction.reference).toSet();
+      final visibleReferences = visibleTransaction
+          .map((transaction) => transaction.reference)
+          .toSet();
       _pruneSelection(visibleReferences);
       final selectionCount = _selectedReferences.length;
 
@@ -470,14 +520,12 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
                     IconButton(
                       tooltip: 'Select all',
                       icon: const Icon(Icons.select_all),
-                      onPressed: () =>
-                          _toggleSelectAll(visibleTransaction),
+                      onPressed: () => _toggleSelectAll(visibleTransaction),
                     ),
                     IconButton(
                       tooltip: 'Invert selection',
                       icon: const Icon(Icons.swap_horiz),
-                      onPressed: () =>
-                          _invertSelection(visibleTransaction),
+                      onPressed: () => _invertSelection(visibleTransaction),
                     ),
                     IconButton(
                       tooltip: 'Delete selected',
@@ -485,7 +533,32 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
                       onPressed: () => _confirmDeleteSelected(provider),
                     ),
                   ]
-                : null,
+                : widget.bankId == CashConstants.bankId
+                    ? null
+                    : [
+                        if (_isReparsing)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          IconButton(
+                            tooltip: 'Reparse transactions',
+                            icon: const Icon(Icons.refresh_rounded),
+                            onPressed: () => _reparseTransactionsForAccount(
+                              provider,
+                              transactions,
+                            ),
+                          ),
+                      ],
           ),
           body: SingleChildScrollView(
               child: Column(

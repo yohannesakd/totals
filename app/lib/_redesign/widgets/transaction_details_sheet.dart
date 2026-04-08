@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:totals/_redesign/theme/app_colors.dart';
+import 'package:totals/_redesign/theme/app_icons.dart';
 import 'package:totals/models/category.dart';
 import 'package:totals/models/transaction.dart';
 import 'package:totals/providers/transaction_provider.dart';
 import 'package:totals/services/notification_settings_service.dart';
 import 'package:totals/utils/text_utils.dart';
-import 'package:totals/_redesign/theme/app_icons.dart';
+import 'package:totals/utils/transaction_link_utils.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// Shows the transaction details bottom sheet matching the redesign style.
 Future<void> showTransactionDetailsSheet({
@@ -117,8 +119,6 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
     if (creditor != null && creditor.isNotEmpty) return creditor;
     return null;
   }
-
-  bool get _isUnknownCounterparty => _storedCounterpartyValue == null;
 
   String get _counterpartyRole => _isCredit ? 'sender' : 'recipient';
 
@@ -281,7 +281,8 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
     if (_isApplyingCategory || category.id == null) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     final shouldAutoCategorize = _autoCategorizeFutureTransactions;
-    final existingRule = _provider.findAutoCategorizationRuleForTransaction(_tx);
+    final existingRule =
+        _provider.findAutoCategorizationRuleForTransaction(_tx);
     if (_currentCategory?.id == category.id) {
       _dismissComposerState(clearDraft: true);
       final shouldSyncRule = shouldAutoCategorize
@@ -386,10 +387,42 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
     }
   }
 
-  void _copyReference() {
+  void _copyReference({String message = 'Reference copied'}) {
     Clipboard.setData(ClipboardData(text: _tx.reference));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reference copied')),
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _handleReferenceTap() async {
+    final link = TransactionLinkUtils.resolveReferenceLink(_tx);
+    if (link == null) {
+      _copyReference();
+      return;
+    }
+
+    final uri = Uri.tryParse(link);
+    if (uri == null) {
+      _copyReference();
+      return;
+    }
+
+    try {
+      final opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (opened) return;
+    } catch (_) {}
+
+    try {
+      final opened = await launchUrl(uri);
+      if (opened) return;
+    } catch (_) {}
+
+    if (!mounted) return;
+    _copyReference(
+      message: 'Could not open receipt link. Reference copied instead',
     );
   }
 
@@ -851,7 +884,9 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
                         label: 'Reference',
                         value: _tx.reference,
                         marquee: true,
-                        onTap: _copyReference,
+                        onTap: () {
+                          unawaited(_handleReferenceTap());
+                        },
                       ),
                       _DetailRow(label: 'Bank', value: _bankShortName),
                       // if (_tx.accountNumber != null &&
@@ -1167,8 +1202,9 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
     if (counterparty == null) return const SizedBox.shrink();
 
     final isChecked = _autoCategorizeFutureTransactions;
-    final activeColor = AppColors.primaryLight;
-    final borderColor = isChecked ? activeColor : AppColors.borderColor(context);
+    const activeColor = AppColors.primaryLight;
+    final borderColor =
+        isChecked ? activeColor : AppColors.borderColor(context);
 
     return InkWell(
       onTap: _isApplyingCategory
@@ -1198,7 +1234,8 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
                 color: isChecked ? activeColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: isChecked ? activeColor : AppColors.borderColor(context),
+                  color:
+                      isChecked ? activeColor : AppColors.borderColor(context),
                   width: 1.4,
                 ),
               ),
