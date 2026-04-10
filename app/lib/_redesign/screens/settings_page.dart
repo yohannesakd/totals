@@ -1,11 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:totals/_redesign/theme/app_colors.dart';
 import 'package:totals/providers/theme_provider.dart';
 import 'package:totals/providers/transaction_provider.dart';
@@ -55,42 +54,9 @@ class _RedesignSettingsPageState extends State<RedesignSettingsPage> {
       DataExportImportService();
   final SmsConfigService _smsConfigService = SmsConfigService();
 
-  bool _useRedesign = true;
-  bool _isLoadingRedesign = true;
   bool _isExporting = false;
   bool _isImporting = false;
   bool _isFetchingSmsPatterns = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadRedesignSetting();
-  }
-
-  // ── Preferences loading ─────────────────────────────────────────────────
-
-  Future<void> _loadRedesignSetting() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _useRedesign = prefs.getBool('use_redesign') ?? true;
-        _isLoadingRedesign = false;
-      });
-    }
-  }
-
-  Future<void> _toggleRedesign(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('use_redesign', value);
-    setState(() => _useRedesign = value);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Restart the app to apply the new design.'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
 
   Future<void> _fetchSmsPatterns() async {
     if (_isFetchingSmsPatterns) {
@@ -633,8 +599,9 @@ class _RedesignSettingsPageState extends State<RedesignSettingsPage> {
               final appDir = await getApplicationDocumentsDirectory();
               final file = File('${appDir.path}/$fileName');
               await file.writeAsString(jsonData);
-              if (mounted)
+              if (mounted) {
                 _showSnack('Data saved to: ${appDir.path}/$fileName');
+              }
             }
           } catch (_) {
             final tempDir = await getTemporaryDirectory();

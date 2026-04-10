@@ -314,22 +314,38 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
         transactions: accountTransactions,
       );
 
-      if (result.updatedTransactions > 0) {
+      if (result.updatedTransactions > 0 ||
+          result.importedTransactions > 0 ||
+          result.categorizedTransactions > 0) {
         await provider.loadData();
       }
       if (!mounted) return;
 
+      final actionParts = <String>[
+        if (result.updatedTransactions > 0)
+          'updated ${result.updatedTransactions}',
+        if (result.importedTransactions > 0)
+          'imported ${result.importedTransactions}',
+        if (result.categorizedTransactions > 0)
+          'auto-categorized ${result.categorizedTransactions}',
+      ];
+      final actionSummary = actionParts.isEmpty
+          ? null
+          : actionParts.length == 1
+              ? actionParts.first
+              : actionParts.length == 2
+                  ? '${actionParts[0]} and ${actionParts[1]}'
+                  : '${actionParts[0]}, ${actionParts[1]}, and ${actionParts[2]}';
       final message = result.errorMessage ??
           (result.unsupported
               ? 'Reparse is available only for SMS-backed bank accounts.'
               : result.permissionDenied
                   ? 'SMS permission is required to reparse transactions.'
-                  : result.updatedTransactions == 0
-                      ? 'No transactions were updated. '
+                  : actionSummary == null
+                      ? 'No matching transactions changed. '
                           'Scanned ${result.scannedMessages} bank messages.'
-                      : 'Reparsed ${result.updatedTransactions} transactions. '
-                          'Added ${result.addedReceiptLinks} receipt '
-                          'link${result.addedReceiptLinks == 1 ? '' : 's'}.');
+                      : '${actionSummary[0].toUpperCase()}${actionSummary.substring(1)} transactions.'
+                          '${result.addedReceiptLinks > 0 ? ' Added ${result.addedReceiptLinks} receipt link${result.addedReceiptLinks == 1 ? '' : 's'}.' : ''}');
 
       messenger?.showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {

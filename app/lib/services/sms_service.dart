@@ -714,6 +714,7 @@ class SmsService {
     DateTime? messageDate,
     bool notifyUser = false,
     bool skipDashenExpenseDuplicates = true,
+    bool skipAutoCategorization = false,
   }) async {
     final result = await _processMessageInternal(
       messageBody,
@@ -721,6 +722,7 @@ class SmsService {
       messageDate: messageDate,
       notifyUser: notifyUser,
       skipDashenExpenseDuplicates: skipDashenExpenseDuplicates,
+      skipAutoCategorization: skipAutoCategorization,
       recordFailure: true,
     );
     return result.transaction;
@@ -731,6 +733,7 @@ class SmsService {
     String senderAddress, {
     DateTime? messageDate,
     bool skipDashenExpenseDuplicates = true,
+    bool skipAutoCategorization = false,
   }) async {
     return _processMessageInternal(
       messageBody,
@@ -738,6 +741,7 @@ class SmsService {
       messageDate: messageDate,
       notifyUser: false,
       skipDashenExpenseDuplicates: skipDashenExpenseDuplicates,
+      skipAutoCategorization: skipAutoCategorization,
       recordFailure: false,
     );
   }
@@ -748,6 +752,7 @@ class SmsService {
     DateTime? messageDate,
     bool notifyUser = false,
     bool skipDashenExpenseDuplicates = true,
+    bool skipAutoCategorization = false,
     bool recordFailure = true,
   }) async {
     print("debug: Processing message: $messageBody");
@@ -945,13 +950,18 @@ class SmsService {
     // Need to ensure details has all fields or handle parsing
     // Transaction.fromJson expects Strings mostly?
     Transaction newTx = Transaction.fromJson(details);
-    await txRepo.saveTransaction(newTx);
+    await txRepo.saveTransaction(
+      newTx,
+      skipAutoCategorization: skipAutoCategorization,
+    );
+    final savedTx =
+        await txRepo.getTransactionByReference(newTx.reference) ?? newTx;
 
-    print("debug: New transaction saved: ${newTx.reference}");
+    print("debug: New transaction saved: ${savedTx.reference}");
 
     if (_isAtmWithdrawal(details, messageBody)) {
       try {
-        await _createCashTransactionForAtmWithdrawal(newTx, existingTx);
+        await _createCashTransactionForAtmWithdrawal(savedTx, existingTx);
       } catch (e) {
         print("debug: Error creating cash transfer: $e");
       }
@@ -959,12 +969,12 @@ class SmsService {
 
     if (notifyUser) {
       await NotificationService.instance.showTransactionNotification(
-        transaction: newTx,
+        transaction: savedTx,
         bankId: bankId,
       );
     }
 
-    if (newTx.type == 'DEBIT') {
+    if (savedTx.type == 'DEBIT') {
       try {
         await BudgetAlertService().checkAndNotifyBudgetAlerts();
       } catch (e) {
@@ -980,7 +990,7 @@ class SmsService {
 
     return ParseResult(
       status: ParseStatus.success,
-      transaction: newTx,
+      transaction: savedTx,
     );
   }
 }

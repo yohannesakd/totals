@@ -17,6 +17,7 @@ import 'package:totals/providers/transaction_provider.dart';
 import 'package:totals/repositories/account_repository.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:totals/services/account_registration_service.dart';
+import 'package:totals/services/account_transaction_reparse_service.dart';
 import 'package:totals/services/account_sync_status_service.dart';
 import 'package:totals/services/bank_detection_service.dart';
 import 'package:totals/services/sms_config_service.dart';
@@ -488,6 +489,7 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
   String? _expandedAccountNumber;
   bool _showAccountBalances = false;
   final Set<String> _selectedRefs = {};
+  final Set<String> _reparsingAccountKeys = <String>{};
   _LedgerFilter _ledgerFilter = const _LedgerFilter();
   final ScrollController _activityScrollController = ScrollController();
   int _currentPage = 0;
@@ -516,6 +518,8 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
   DateTime? _analyticsHeatmapFocusMonth;
   _AnalyticsChartSection _analyticsSelectedChartSection =
       _AnalyticsChartSection.heatmap;
+  final AccountTransactionReparseService _accountTransactionReparseService =
+      AccountTransactionReparseService();
   late final AnimationController _subTabFadeController;
   late final Animation<double> _subTabFadeAnimation;
   _ActivityTransactionsViewCacheKey? _activityTransactionsViewCacheKey;
@@ -2858,6 +2862,21 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
               ...accounts.map((account) {
                 final isCash = account.bankId == CashConstants.bankId;
                 final acctTxnCount = account.totalTransactions.toInt();
+                final syncStatus = isCash
+                    ? null
+                    : syncStatusService.getSyncStatus(
+                        account.accountNumber,
+                        account.bankId,
+                      );
+                final syncProgress = isCash
+                    ? null
+                    : syncStatusService.getSyncProgress(
+                        account.accountNumber,
+                        account.bankId,
+                      );
+                final isReparsing = _reparsingAccountKeys
+                        .contains(_accountActionKey(account)) ||
+                    syncStatus != null;
                 return _AccountCard(
                   account: account,
                   bankId: _selectedBankId!,
@@ -2865,24 +2884,18 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
                   isExpanded: _expandedAccountNumber == account.accountNumber,
                   showBalance: _showAccountBalances,
                   transactionCount: acctTxnCount,
-                  syncStatus: isCash
-                      ? null
-                      : syncStatusService.getSyncStatus(
-                          account.accountNumber,
-                          account.bankId,
-                        ),
-                  syncProgress: isCash
-                      ? null
-                      : syncStatusService.getSyncProgress(
-                          account.accountNumber,
-                          account.bankId,
-                        ),
+                  syncStatus: syncStatus,
+                  syncProgress: syncProgress,
                   onToggleExpand: () => setState(() {
                     _expandedAccountNumber =
                         _expandedAccountNumber == account.accountNumber
                             ? null
                             : account.accountNumber;
                   }),
+                  isReparsing: isReparsing,
+                  onReparse: isCash
+                      ? null
+                      : () => _openAccountReparseSheet(provider, account),
                   onDelete:
                       isCash ? null : () => _showDeleteConfirmation(account),
                   onCashExpense: isCash ? _showCashExpenseSheet : null,
@@ -3177,6 +3190,125 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
         },
       ),
     );
+  }
+
+  String _accountActionKey(AccountSummary account) {
+    return '${account.bankId}:${account.accountNumber}';
+  }
+
+  bank_model.Bank? _resolveBankInfo(int bankId) {
+    for (final bank in _assetBanks) {
+      if (bank.id == bankId) return bank;
+    }
+    return null;
+  }
+
+  List<Transaction> _transactionsForAccount(
+    TransactionProvider provider,
+    AccountSummary account,
+  ) {
+    final bank = _resolveBankInfo(account.bankId);
+    return provider.allTransactions.where((transaction) {
+      if (transaction.bankId != account.bankId) return false;
+
+      if (account.bankId == CashConstants.bankId) {
+        return transaction.accountNumber == account.accountNumber;
+      }
+
+      if (bank?.uniformMasking == true && bank?.maskPattern != null) {
+        final maskPattern = bank!.maskPattern!;
+        final transactionAccount = transaction.accountNumber?.trim();
+        if (transactionAccount == null || transactionAccount.isEmpty) {
+          return false;
+        }
+        if (account.accountNumber.length < maskPattern ||
+            transactionAccount.length < maskPattern) {
+          return false;
+        }
+        return account.accountNumber.substring(
+              account.accountNumber.length - maskPattern,
+            ) ==
+            transactionAccount.substring(
+              transactionAccount.length - maskPattern,
+            );
+      }
+
+      if (bank?.uniformMasking == false) {
+        return true;
+      }
+
+      return transaction.accountNumber == account.accountNumber;
+    }).toList(growable: false);
+  }
+
+  Future<void> _openAccountReparseSheet(
+    TransactionProvider provider,
+    AccountSummary account,
+  ) async {
+    final selection = await showModalBottomSheet<_AccountReparseSelection>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ReparseAccountSheet(
+        accountNumber: account.accountNumber,
+        bankName: _getBankName(account.bankId),
+      ),
+    );
+    if (selection == null) return;
+
+    await _reparseTransactionsForAccount(
+      provider,
+      account,
+      startDate: selection.startDate,
+      refreshExistingTransactions: selection.refreshExistingTransactions,
+      importMissedTransactions: selection.importMissedTransactions,
+      applyAutoCategorization: selection.applyAutoCategorization,
+    );
+  }
+
+  Future<void> _reparseTransactionsForAccount(
+    TransactionProvider provider,
+    AccountSummary account, {
+    DateTime? startDate,
+    bool refreshExistingTransactions = true,
+    bool importMissedTransactions = true,
+    bool applyAutoCategorization = true,
+  }) async {
+    final accountKey = _accountActionKey(account);
+    if (_reparsingAccountKeys.contains(accountKey)) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final accountTransactions = _transactionsForAccount(provider, account);
+
+    setState(() => _reparsingAccountKeys.add(accountKey));
+
+    try {
+      final result = await _accountTransactionReparseService
+          .startReparseAccountTransactionsInBackground(
+        bankId: account.bankId,
+        accountNumber: account.accountNumber,
+        transactions: accountTransactions,
+        startDate: startDate,
+        refreshExistingTransactions: refreshExistingTransactions,
+        importMissedTransactions: importMissedTransactions,
+        applyAutoCategorization: applyAutoCategorization,
+      );
+
+      if (!mounted) return;
+      final message = result.started
+          ? 'Reparse started in the background. Progress will appear on the account card.'
+          : (result.errorMessage ?? 'Could not start reparse.');
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not reparse transactions: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _reparsingAccountKeys.remove(accountKey));
+      }
+    }
   }
 
   void _showDeleteConfirmation(AccountSummary account) {
@@ -10618,7 +10750,9 @@ class _AccountCard extends StatelessWidget {
   final int transactionCount;
   final String? syncStatus;
   final double? syncProgress;
+  final bool isReparsing;
   final VoidCallback onToggleExpand;
+  final VoidCallback? onReparse;
   final VoidCallback? onDelete;
   final VoidCallback? onCashExpense;
   final VoidCallback? onCashIncome;
@@ -10634,7 +10768,9 @@ class _AccountCard extends StatelessWidget {
     required this.transactionCount,
     required this.syncStatus,
     required this.syncProgress,
+    this.isReparsing = false,
     required this.onToggleExpand,
+    this.onReparse,
     this.onDelete,
     this.onCashExpense,
     this.onCashIncome,
@@ -10659,6 +10795,8 @@ class _AccountCard extends StatelessWidget {
         : '${(normalizedProgress * 100).round()}%';
     final primaryValueLabel =
         syncStatus != null ? (syncPercentLabel ?? '0%') : balanceLabel;
+    final isBusy = isReparsing || syncStatus != null;
+    final canDelete = onDelete != null && !isBusy;
 
     final accountLabel = isCash ? 'On-hand cash' : account.accountNumber;
     final holderLabel =
@@ -10846,34 +10984,50 @@ class _AccountCard extends StatelessWidget {
                         ),
                       ],
                     ),
-                    // Delete for non-cash accounts
-                    if (onDelete != null) ...[
+                    if (onReparse != null || onDelete != null) ...[
                       const SizedBox(height: 14),
                       Container(
                           height: 1, color: AppColors.borderColor(context)),
-                      const SizedBox(height: 8),
-                      GestureDetector(
-                        onTap: onDelete,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              AppIcons.delete_outline_rounded,
-                              size: 16,
-                              color: AppColors.red.withValues(alpha: 0.7),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Remove Account',
-                              style: TextStyle(
-                                color: AppColors.red.withValues(alpha: 0.7),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
+                      if (onReparse != null) ...[
+                        const SizedBox(height: 12),
+                        _CashActionButton(
+                          label: isBusy ? 'Syncing...' : 'Reparse SMS',
+                          icon: AppIcons.refresh,
+                          color: AppColors.primaryDark,
+                          outlined: true,
+                          isLoading: isBusy,
+                          onTap: isBusy ? null : onReparse,
                         ),
-                      ),
+                      ],
+                      if (onDelete != null) ...[
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: canDelete ? onDelete : null,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                AppIcons.delete_outline_rounded,
+                                size: 16,
+                                color: AppColors.red.withValues(
+                                  alpha: canDelete ? 0.7 : 0.35,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Remove Account',
+                                style: TextStyle(
+                                  color: AppColors.red.withValues(
+                                    alpha: canDelete ? 0.7 : 0.35,
+                                  ),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ],
                   // Cash wallet actions – always visible below the card
@@ -10998,6 +11152,7 @@ class _CashActionButton extends StatelessWidget {
   final IconData icon;
   final Color color;
   final bool outlined;
+  final bool isLoading;
   final VoidCallback? onTap;
 
   const _CashActionButton({
@@ -11005,30 +11160,46 @@ class _CashActionButton extends StatelessWidget {
     required this.icon,
     required this.color,
     this.outlined = false,
+    this.isLoading = false,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isDisabled = onTap == null;
+    final effectiveColor = isDisabled ? color.withValues(alpha: 0.5) : color;
+    final foregroundColor = outlined ? effectiveColor : AppColors.white;
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: outlined ? AppColors.cardColor(context) : color,
+          color: outlined ? AppColors.cardColor(context) : effectiveColor,
           borderRadius: BorderRadius.circular(10),
-          border:
-              outlined ? Border.all(color: color.withValues(alpha: 0.5)) : null,
+          border: outlined
+              ? Border.all(color: effectiveColor.withValues(alpha: 0.5))
+              : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: outlined ? color : AppColors.white),
+            if (isLoading)
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: foregroundColor,
+                ),
+              )
+            else
+              Icon(icon, size: 16, color: foregroundColor),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
-                color: outlined ? color : AppColors.white,
+                color: foregroundColor,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
@@ -11726,6 +11897,424 @@ class _AddAccountSheetState extends State<_AddAccountSheet> {
                   ],
                 ),
         ),
+      ),
+    );
+  }
+}
+
+class _AccountReparseSelection {
+  final DateTime? startDate;
+  final bool refreshExistingTransactions;
+  final bool importMissedTransactions;
+  final bool applyAutoCategorization;
+
+  const _AccountReparseSelection({
+    this.startDate,
+    this.refreshExistingTransactions = true,
+    this.importMissedTransactions = true,
+    this.applyAutoCategorization = true,
+  });
+}
+
+class _ReparseAccountSheet extends StatefulWidget {
+  final String accountNumber;
+  final String bankName;
+
+  const _ReparseAccountSheet({
+    required this.accountNumber,
+    required this.bankName,
+  });
+
+  @override
+  State<_ReparseAccountSheet> createState() => _ReparseAccountSheetState();
+}
+
+class _ReparseAccountSheetState extends State<_ReparseAccountSheet> {
+  DateTime? _startDate;
+  bool _refreshExistingTransactions = true;
+  bool _importMissedTransactions = true;
+  bool _applyAutoCategorization = true;
+
+  bool get _hasSelectedAction =>
+      _refreshExistingTransactions ||
+      _importMissedTransactions ||
+      _applyAutoCategorization;
+
+  Future<void> _pickStartDate() async {
+    final initialDate = _startDate ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      builder: (ctx, child) {
+        final dark = AppColors.isDark(ctx);
+        return Theme(
+          data: Theme.of(ctx).copyWith(
+            colorScheme: dark
+                ? ColorScheme.dark(
+                    primary: AppColors.primaryLight,
+                    onPrimary: AppColors.white,
+                    surface: AppColors.darkCard,
+                    onSurface: AppColors.white,
+                  )
+                : const ColorScheme.light(
+                    primary: AppColors.primaryDark,
+                    onPrimary: AppColors.white,
+                    surface: AppColors.white,
+                    onSurface: AppColors.slate900,
+                  ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _startDate = picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final navBarInset = MediaQuery.of(context).viewPadding.bottom;
+    final hintColor = AppColors.textSecondary(context);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      decoration: BoxDecoration(
+        color: AppColors.background(context),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(bottom: bottomInset + navBarInset),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 16),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.slate400,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Reparse SMS',
+                  style: TextStyle(
+                    color: AppColors.textPrimary(context),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceColor(context),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      AppIcons.close,
+                      color: AppColors.textSecondary(context),
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Choose what this scan should do for the selected account. Existing categories stay untouched; auto-categorization only fills uncategorized transactions.',
+              style: TextStyle(
+                color: hintColor,
+                fontSize: 13,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceColor(context),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.borderColor(context)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.bankName,
+                    style: TextStyle(
+                      color: AppColors.textPrimary(context),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.accountNumber,
+                    style: TextStyle(
+                      color: hintColor,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Actions',
+              style: TextStyle(
+                color: AppColors.textPrimary(context),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _ReparseScopeTile(
+              title: 'Refresh existing transactions',
+              subtitle:
+                  'Update details like receipt links, balances, counterparties, and account info from matching SMS.',
+              value: _refreshExistingTransactions,
+              onChanged: (value) {
+                setState(() => _refreshExistingTransactions = value);
+              },
+            ),
+            const SizedBox(height: 10),
+            _ReparseScopeTile(
+              title: 'Import missed transactions',
+              subtitle:
+                  'Create transactions for matching bank SMS that were never imported before.',
+              value: _importMissedTransactions,
+              onChanged: (value) {
+                setState(() => _importMissedTransactions = value);
+              },
+            ),
+            const SizedBox(height: 10),
+            _ReparseScopeTile(
+              title: 'Apply auto-categorization',
+              subtitle:
+                  'Run saved auto-category rules on uncategorized matched or newly imported transactions.',
+              value: _applyAutoCategorization,
+              onChanged: (value) {
+                setState(() => _applyAutoCategorization = value);
+              },
+            ),
+            if (!_hasSelectedAction) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Choose at least one action to run.',
+                style: TextStyle(
+                  color: AppColors.red.withValues(alpha: 0.8),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            Text(
+              'Start date',
+              style: TextStyle(
+                color: AppColors.textPrimary(context),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _pickStartDate,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 14,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceColor(context),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.borderColor(context)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _startDate == null
+                                ? 'All available bank messages'
+                                : _formatDateHeader(_startDate!),
+                            style: TextStyle(
+                              color: AppColors.textPrimary(context),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _startDate == null
+                                ? 'Leave blank to scan the full SMS history for this bank.'
+                                : 'Only scan messages from this date onward.',
+                            style: TextStyle(
+                              color: hintColor,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      AppIcons.chevron_right_rounded,
+                      size: 18,
+                      color: hintColor,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_startDate != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => setState(() => _startDate = null),
+                  child: const Text('Clear start date'),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      side: BorderSide(color: AppColors.borderColor(context)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: AppColors.textSecondary(context),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: !_hasSelectedAction
+                        ? null
+                        : () => Navigator.of(context).pop(
+                              _AccountReparseSelection(
+                                startDate: _startDate,
+                                refreshExistingTransactions:
+                                    _refreshExistingTransactions,
+                                importMissedTransactions:
+                                    _importMissedTransactions,
+                                applyAutoCategorization:
+                                    _applyAutoCategorization,
+                              ),
+                            ),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      backgroundColor: AppColors.primaryDark,
+                      foregroundColor: AppColors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Run Reparse',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 30),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReparseScopeTile extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _ReparseScopeTile({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceColor(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.borderColor(context)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: AppColors.textPrimary(context),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: AppColors.textSecondary(context),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Switch.adaptive(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: AppColors.primaryDark,
+            activeTrackColor: AppColors.primaryDark.withValues(alpha: 0.32),
+          ),
+        ],
       ),
     );
   }

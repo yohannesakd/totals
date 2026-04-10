@@ -792,6 +792,7 @@ class NotificationService {
     required String stage,
     required double progress,
     String? bankLabel,
+    bool includePercentInBody = true,
   }) async {
     try {
       await ensureInitialized();
@@ -800,7 +801,9 @@ class NotificationService {
       final percent = (clamped * 100).round();
       final title = bankLabel == null ? 'Syncing account' : '$bankLabel sync';
       final maskedAccount = _maskAccountNumber(accountNumber);
-      final progressStage = _formatSyncProgressStage(stage, percent);
+      final progressStage = includePercentInBody
+          ? _formatSyncProgressStage(stage, percent)
+          : stage.trim();
       final body = maskedAccount == null
           ? progressStage
           : '$progressStage - $maskedAccount';
@@ -858,7 +861,7 @@ class NotificationService {
         id,
         title,
         body,
-        NotificationDetails(
+        const NotificationDetails(
           android: AndroidNotificationDetails(
             _accountSyncChannelId,
             'Account sync',
@@ -870,7 +873,7 @@ class NotificationService {
             ongoing: false,
             onlyAlertOnce: true,
           ),
-          iOS: const DarwinNotificationDetails(),
+          iOS: DarwinNotificationDetails(),
         ),
       );
       await _recordHistory(
@@ -999,14 +1002,6 @@ class NotificationService {
     final collapsed = messageBody.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (collapsed.length <= 180) return collapsed;
     return '${collapsed.substring(0, 177)}...';
-  }
-
-  static String? _firstNonEmpty(List<String?> values) {
-    for (final v in values) {
-      final trimmed = v?.trim();
-      if (trimmed != null && trimmed.isNotEmpty) return trimmed;
-    }
-    return null;
   }
 
   static int _accountSyncNotificationId(String accountNumber, int bankId) {
