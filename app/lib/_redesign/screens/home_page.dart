@@ -11,6 +11,9 @@ import 'package:totals/constants/cash_constants.dart';
 import 'package:totals/models/summary_models.dart';
 import 'package:totals/models/transaction.dart';
 import 'package:totals/providers/transaction_provider.dart';
+import 'package:totals/providers/theme_provider.dart';
+import 'package:totals/theme/app_calendar_option.dart';
+import 'package:kenat/kenat.dart';
 import 'package:totals/_redesign/screens/redesign_shell.dart';
 import 'package:totals/services/data_export_import_service.dart';
 import 'package:totals/services/sms_service.dart';
@@ -1776,6 +1779,8 @@ class _IncomeExpenseTrendChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEC = context.watch<ThemeProvider>().appCalendar == AppCalendarOption.ethiopian;
+
     if (trendSeries.maxValue <= 0.001) {
       return Center(
         child: Text(
@@ -1837,6 +1842,7 @@ class _IncomeExpenseTrendChart extends StatelessWidget {
                 value,
                 meta,
                 pointCount,
+                isEC,
               ),
             ),
           ),
@@ -1945,6 +1951,7 @@ Widget _buildHomeTrendBottomAxisTitle(
   double value,
   TitleMeta meta,
   int pointCount,
+  bool isEC,
 ) {
   if ((value - value.roundToDouble()).abs() > 0.001) {
     return const SizedBox.shrink();
@@ -1961,7 +1968,16 @@ Widget _buildHomeTrendBottomAxisTitle(
   final today = DateTime.now();
   final endDate = DateTime(today.year, today.month, today.day);
   final date = endDate.subtract(Duration(days: pointCount - 1 - index));
-  final label = DateFormat('MMM d').format(date);
+  
+  String label;
+  if (isEC) {
+    final ecDate = Kenat.fromGregorian(date.year, date.month, date.day).getEthiopian();
+    final fullMonth = MonthNames.amharic[ecDate['month']! - 1];
+    final shortMonth = fullMonth.length <= 3 ? fullMonth : fullMonth.substring(0, 3);
+    label = '$shortMonth ${ecDate['day']}';
+  } else {
+    label = DateFormat('MMM d').format(date);
+  }
 
   return SideTitleWidget(
     axisSide: meta.axisSide,
@@ -2112,8 +2128,15 @@ class _BalanceBreakdownSheetState extends State<_BalanceBreakdownSheet> {
     'Dec',
   ];
 
-  String _formatDateKey(DateTime dt) =>
-      '${_months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  String _formatDateKey(DateTime dt) {
+    final isEC = context.read<ThemeProvider>().appCalendar == AppCalendarOption.ethiopian;
+    if (isEC) {
+      final ecDate = Kenat.fromGregorian(dt.year, dt.month, dt.day).getEthiopian();
+      return '${MonthNames.amharic[ecDate['month']! - 1]} ${ecDate['day']}, ${ecDate['year']}';
+    } else {
+      return '${_months[dt.month - 1]} ${dt.day}, ${dt.year}';
+    }
+  }
 
   String _formatTime(DateTime dt) {
     final h = dt.hour;

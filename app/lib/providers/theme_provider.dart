@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:totals/theme/app_font_option.dart';
 import 'package:totals/theme/app_calendar_option.dart';
+
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'theme_mode';
   static const String _uiScaleKey = 'ui_scale';
