@@ -12,6 +12,10 @@ import 'package:totals/services/notification_settings_service.dart';
 import 'package:totals/utils/text_utils.dart';
 import 'package:totals/utils/transaction_link_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:provider/provider.dart';
+import 'package:totals/providers/theme_provider.dart';
+import 'package:totals/theme/app_calendar_option.dart';
+import 'package:kenat/kenat.dart';
 
 /// Shows the transaction details bottom sheet matching the redesign style.
 Future<void> showTransactionDetailsSheet({
@@ -139,29 +143,33 @@ class _TransactionDetailsSheetState extends State<_TransactionDetailsSheet> {
   String? get _formattedDate {
     final dt = _parseTime(_tx.time);
     if (dt == null) return null;
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    final month = months[dt.month - 1];
-    final day = dt.day.toString().padLeft(2, '0');
+
     final hour = dt.hour;
     final minute = dt.minute.toString().padLeft(2, '0');
     final amPm = hour >= 12 ? 'PM' : 'AM';
     final h12 = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
-    final now = DateTime.now();
-    final yearSuffix = dt.year != now.year ? ', ${dt.year}' : '';
-    return '$month $day$yearSuffix · $h12:$minute $amPm';
+    final timeStr = '$h12:$minute $amPm';
+
+    final isEC = context.read<ThemeProvider>().appCalendar == AppCalendarOption.ethiopian;
+
+    if (isEC) {
+      final ecDate = Kenat.fromGregorian(dt.year, dt.month, dt.day).getEthiopian();
+      final month = MonthNames.amharic[ecDate['month']! - 1];
+      final day = ecDate['day'].toString().padLeft(2, '0');
+      final currentEcYear = Kenat.now().getEthiopian()['year'];
+      final yearSuffix = ecDate['year'] != currentEcYear ? ', ${ecDate['year']}' : '';
+      return '$month $day$yearSuffix · $timeStr';
+    } else {
+      const months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      final month = months[dt.month - 1];
+      final day = dt.day.toString().padLeft(2, '0');
+      final now = DateTime.now();
+      final yearSuffix = dt.year != now.year ? ', ${dt.year}' : '';
+      return '$month $day$yearSuffix · $timeStr';
+    }
   }
 
   String? get _formattedBalance {
