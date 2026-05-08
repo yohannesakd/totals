@@ -1062,7 +1062,9 @@ class _RedesignSettingsPageState extends State<RedesignSettingsPage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      themeProvider.appCalendarLabel,
+                      themeProvider.appCalendar == AppCalendarOption.ethiopian
+                          ? 'EC'
+                          : 'GC',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: AppColors.textSecondary(context),
                         fontWeight: FontWeight.w600,
