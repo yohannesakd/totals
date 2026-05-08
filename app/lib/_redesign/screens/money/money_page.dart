@@ -3944,6 +3944,12 @@ String _formatCompactSignedEtb(double value) {
   return '$sign${_formatEtbAbbrev(value.abs())}';
 }
 
+String _safePrefix(String value, int length) {
+  if (value.isEmpty || length <= 0) return '';
+  final safeLength = value.length < length ? value.length : length;
+  return value.substring(0, safeLength);
+}
+
 String _formatMonthYear(DateTime date, [BuildContext? context]) {
   if (context != null) {
     try {
@@ -4114,6 +4120,28 @@ String _formatLedgerTime(DateTime dt, [BuildContext? context]) {
   final period = hour >= 12 ? 'PM' : 'AM';
   final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
   return '$displayHour:${minute.toString().padLeft(2, '0')} $period';
+}
+
+Map<String, String?> _formatLedgerTimeParts(DateTime dt, [BuildContext? context]) {
+  if (context != null) {
+    try {
+      final isEC =
+          Provider.of<ThemeProvider>(context, listen: false).appCalendar ==
+          AppCalendarOption.ethiopian;
+      if (isEC) {
+        final time = Time.fromGregorian(dt.hour, dt.minute);
+        final timeText = time.format({
+          'useGeez': false,
+          'lang': 'amharic',
+          'showPeriodLabel': false,
+        });
+        final periodText =
+            time.period == 'night' ? PeriodLabels.night : PeriodLabels.day;
+        return {'time': timeText, 'period': periodText};
+      }
+    } catch (_) {}
+  }
+  return {'time': _formatLedgerTime(dt, context), 'period': null};
 }
 
 String _getBankImage(int bankId) {
@@ -7546,9 +7574,10 @@ Widget _buildAnalyticsTrendBottomAxisTitle(
   String label;
   if (isEC) {
     final ec = Kenat.fromGregorian(bucketDates[index].year, bucketDates[index].month, bucketDates[index].day).getEthiopian();
+    final monthShort = _safePrefix(MonthNames.amharic[ec['month']! - 1], 3);
     label = period == _AnalyticsLineChartPeriod.yearly
-        ? MonthNames.amharic[ec['month']! - 1].substring(0, 3)
-        : '${MonthNames.amharic[ec['month']! - 1].substring(0, 3)} ${ec['day']}';
+        ? monthShort
+        : '$monthShort ${ec['day']}';
   } else {
     label = period == _AnalyticsLineChartPeriod.yearly
         ? DateFormat('MMM').format(bucketDates[index])
@@ -8481,7 +8510,7 @@ class _AnalyticsBarChartCard extends StatelessWidget {
         : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     final monthlyLabels = ['W1', 'W2', 'W3', 'W4', 'W5'];
     final yearlyLabels = isEC 
-        ? MonthNames.amharic.map((m) => m.substring(0, 3)).toList()
+        ? MonthNames.amharic.map((m) => _safePrefix(m, 3)).toList()
         : yearlyLabelsDefault;
 
     final labels = switch (filter.barPeriod) {
@@ -10799,7 +10828,11 @@ class _LedgerTransactionEntry extends StatelessWidget {
     final bankName = _bankLabel(transaction.bankId);
 
     final dt = _parseTransactionTime(transaction.time);
-    final timeStr = dt != null ? _formatLedgerTime(dt, context) : '';
+    final timeParts = dt != null
+        ? _formatLedgerTimeParts(dt, context)
+        : const {'time': '', 'period': null};
+    final timeStr = timeParts['time'] ?? '';
+    final periodStr = timeParts['period'];
 
     final parsedBalance = _parseRunningBalance(transaction.currentBalance);
     final effectiveBalance = parsedBalance ?? derivedBalance;
@@ -10814,13 +10847,28 @@ class _LedgerTransactionEntry extends StatelessWidget {
         children: [
           SizedBox(
             width: 64,
-            child: Text(
-              timeStr,
-              style: TextStyle(
-                color: AppColors.textSecondary(context),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  timeStr,
+                  style: TextStyle(
+                    color: AppColors.textSecondary(context),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (periodStr != null && periodStr.isNotEmpty)
+                  Text(
+                    periodStr,
+                    style: TextStyle(
+                      color: AppColors.textTertiary(context),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      height: 1.1,
+                    ),
+                  ),
+              ],
             ),
           ),
           Expanded(
