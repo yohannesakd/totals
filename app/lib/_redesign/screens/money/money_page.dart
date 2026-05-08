@@ -1187,6 +1187,7 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
           periodLabel: _formatAnalyticsSpendingPeriodLabel(
             _analyticsHeatmapView,
             _normalizeAnalyticsHeatmapMonth(heatmapFocusMonth),
+            context: context,
           ),
           periodKey:
               'heatmap-${_analyticsHeatmapView.name}-${periodStart.year}-${periodStart.month}',
@@ -1215,12 +1216,46 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
             showIncome: filter.mode == _AnalyticsHeatmapMode.income,
           );
         }
-        final targetMonth = DateTime(
-          _resolveAnalyticsChartAnchorMonth(filteredTransactions).year,
-          _resolveAnalyticsChartAnchorMonth(filteredTransactions).month +
-              _analyticsBubbleChartOffset,
-          1,
+        final anchorMonth = _resolveAnalyticsChartAnchorMonth(
+          filteredTransactions,
         );
+        DateTime targetMonth;
+        try {
+          final isEC =
+              context.read<ThemeProvider>().appCalendar ==
+              AppCalendarOption.ethiopian;
+          if (isEC) {
+            final ec = Kenat.fromGregorian(
+              anchorMonth.year,
+              anchorMonth.month,
+              anchorMonth.day,
+            ).getEthiopian();
+            var y = ec['year']!;
+            var m = ec['month']! + _analyticsBubbleChartOffset;
+            while (m > 13) {
+              m -= 13;
+              y++;
+            }
+            while (m < 1) {
+              m += 13;
+              y--;
+            }
+            final gc = Kenat.fromEthiopian(y, m, 1).getGregorian();
+            targetMonth = DateTime(gc['year']!, gc['month']!, gc['day']!);
+          } else {
+            targetMonth = DateTime(
+              anchorMonth.year,
+              anchorMonth.month + _analyticsBubbleChartOffset,
+              1,
+            );
+          }
+        } catch (_) {
+          targetMonth = DateTime(
+            anchorMonth.year,
+            anchorMonth.month + _analyticsBubbleChartOffset,
+            1,
+          );
+        }
         return _AnalyticsSupportContext(
           transactions: _transactionsWithinDateWindow(
             filteredTransactions,
@@ -1304,12 +1339,46 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
             showIncome: filter.mode == _AnalyticsHeatmapMode.income,
           );
         }
-        final targetMonth = DateTime(
-          _resolveAnalyticsChartAnchorMonth(filteredTransactions).year,
-          _resolveAnalyticsChartAnchorMonth(filteredTransactions).month +
-              _analyticsPieChartOffset,
-          1,
+        final anchorMonth = _resolveAnalyticsChartAnchorMonth(
+          filteredTransactions,
         );
+        DateTime targetMonth;
+        try {
+          final isEC =
+              context.read<ThemeProvider>().appCalendar ==
+              AppCalendarOption.ethiopian;
+          if (isEC) {
+            final ec = Kenat.fromGregorian(
+              anchorMonth.year,
+              anchorMonth.month,
+              anchorMonth.day,
+            ).getEthiopian();
+            var y = ec['year']!;
+            var m = ec['month']! + _analyticsPieChartOffset;
+            while (m > 13) {
+              m -= 13;
+              y++;
+            }
+            while (m < 1) {
+              m += 13;
+              y--;
+            }
+            final gc = Kenat.fromEthiopian(y, m, 1).getGregorian();
+            targetMonth = DateTime(gc['year']!, gc['month']!, gc['day']!);
+          } else {
+            targetMonth = DateTime(
+              anchorMonth.year,
+              anchorMonth.month + _analyticsPieChartOffset,
+              1,
+            );
+          }
+        } catch (_) {
+          targetMonth = DateTime(
+            anchorMonth.year,
+            anchorMonth.month + _analyticsPieChartOffset,
+            1,
+          );
+        }
         return _AnalyticsSupportContext(
           transactions: _transactionsWithinDateWindow(
             filteredTransactions,
@@ -3942,10 +4011,30 @@ String _formatAnalyticsChartPeriodLabel({
 String _formatAnalyticsSpendingPeriodLabel(
   _AnalyticsHeatmapView view,
   DateTime periodDate,
-) {
+  {
+  BuildContext? context,
+}) {
   return view == _AnalyticsHeatmapView.daily
-      ? _formatMonthYear(periodDate)
-      : '${periodDate.year}';
+      ? _formatMonthYear(periodDate, context)
+      : () {
+          if (context != null) {
+            try {
+              final isEC =
+                  Provider.of<ThemeProvider>(context, listen: false)
+                      .appCalendar ==
+                  AppCalendarOption.ethiopian;
+              if (isEC) {
+                final ec = Kenat.fromGregorian(
+                  periodDate.year,
+                  periodDate.month,
+                  periodDate.day,
+                ).getEthiopian();
+                return 'Meskerem - Pagume ${ec['year']}';
+              }
+            } catch (_) {}
+          }
+          return '${periodDate.year}';
+        }();
 }
 
 String _formatFullMonthName(DateTime date, [BuildContext? context]) {
