@@ -695,10 +695,114 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     return filter.startDate != null || filter.endDate != null;
   }
 
+  bool get _usesEthiopianCalendar =>
+      context.read<ThemeProvider>().appCalendar == AppCalendarOption.ethiopian;
+
+  DateTime _ethiopianDateFromParts(int year, int month, int day) {
+    final gc = Kenat.fromEthiopian(year, month, day).getGregorian();
+    return DateTime(gc['year']!, gc['month']!, gc['day']!);
+  }
+
+  _AnalyticsDateWindow _resolveAnalyticsMonthWindow(DateTime date) {
+    if (!_usesEthiopianCalendar) {
+      final start = DateTime(date.year, date.month, 1);
+      return _AnalyticsDateWindow(
+        start: start,
+        endExclusive: DateTime(start.year, start.month + 1, 1),
+      );
+    }
+
+    final ec =
+        Kenat.fromGregorian(date.year, date.month, date.day).getEthiopian();
+    final start = _ethiopianDateFromParts(ec['year']!, ec['month']!, 1);
+    var nextYear = ec['year']!;
+    var nextMonth = ec['month']! + 1;
+    if (nextMonth > 13) {
+      nextMonth = 1;
+      nextYear++;
+    }
+
+    return _AnalyticsDateWindow(
+      start: start,
+      endExclusive: _ethiopianDateFromParts(nextYear, nextMonth, 1),
+    );
+  }
+
+  _AnalyticsDateWindow _resolveAnalyticsYearWindow(DateTime date) {
+    if (!_usesEthiopianCalendar) {
+      final start = DateTime(date.year, 1, 1);
+      return _AnalyticsDateWindow(
+        start: start,
+        endExclusive: DateTime(start.year + 1, 1, 1),
+      );
+    }
+
+    final ec =
+        Kenat.fromGregorian(date.year, date.month, date.day).getEthiopian();
+    return _AnalyticsDateWindow(
+      start: _ethiopianDateFromParts(ec['year']!, 1, 1),
+      endExclusive: _ethiopianDateFromParts(ec['year']! + 1, 1, 1),
+    );
+  }
+
+  DateTime _shiftAnalyticsMonth(DateTime month, int offset) {
+    if (!_usesEthiopianCalendar) {
+      return DateTime(month.year, month.month + offset, 1);
+    }
+
+    final ec =
+        Kenat.fromGregorian(month.year, month.month, month.day).getEthiopian();
+    var year = ec['year']!;
+    var targetMonth = ec['month']! + offset;
+    while (targetMonth > 13) {
+      targetMonth -= 13;
+      year++;
+    }
+    while (targetMonth < 1) {
+      targetMonth += 13;
+      year--;
+    }
+    return _ethiopianDateFromParts(year, targetMonth, 1);
+  }
+
   int _analyticsMonthDelta(DateTime targetMonth, DateTime anchorMonth) {
+    if (_usesEthiopianCalendar) {
+      final targetEc = Kenat.fromGregorian(
+        targetMonth.year,
+        targetMonth.month,
+        targetMonth.day,
+      ).getEthiopian();
+      final anchorEc = Kenat.fromGregorian(
+        anchorMonth.year,
+        anchorMonth.month,
+        anchorMonth.day,
+      ).getEthiopian();
+      return (targetEc['year']! - anchorEc['year']!) * 13 +
+          targetEc['month']! -
+          anchorEc['month']!;
+    }
+
     return (targetMonth.year - anchorMonth.year) * 12 +
         targetMonth.month -
         anchorMonth.month;
+  }
+
+  int _analyticsYearDelta(DateTime targetDate, DateTime anchorDate) {
+    if (_usesEthiopianCalendar) {
+      final targetEc = Kenat.fromGregorian(
+        targetDate.year,
+        targetDate.month,
+        targetDate.day,
+      ).getEthiopian();
+      final anchorEc = Kenat.fromGregorian(
+        anchorDate.year,
+        anchorDate.month,
+        anchorDate.day,
+      ).getEthiopian();
+      return targetEc['year']! - anchorEc['year']!;
+    }
+
+    return targetDate.year - anchorDate.year;
   }
 
   DateTime _resolveChartVisibleMonth(
@@ -706,7 +810,7 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     required int periodOffset,
   }) {
     final anchorMonth = _resolveAnalyticsChartAnchorMonth(transactions);
-    return DateTime(anchorMonth.year, anchorMonth.month + periodOffset, 1);
+    return _shiftAnalyticsMonth(anchorMonth, periodOffset);
   }
 
   int _resolveLineChartOffsetForVisibleStart(
@@ -725,11 +829,11 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
         );
         return targetWeekStart.difference(anchorWeekStart).inDays ~/ 7;
       case _AnalyticsLineChartPeriod.monthly:
-        final anchorMonth = DateTime(anchorDate.year, anchorDate.month, 1);
-        final targetMonth = DateTime(visibleStart.year, visibleStart.month, 1);
+        final anchorMonth = _resolveAnalyticsMonthWindow(anchorDate).start;
+        final targetMonth = _resolveAnalyticsMonthWindow(visibleStart).start;
         return _analyticsMonthDelta(targetMonth, anchorMonth);
       case _AnalyticsLineChartPeriod.yearly:
-        return visibleStart.year - anchorDate.year;
+        return _analyticsYearDelta(visibleStart, anchorDate);
     }
   }
 
@@ -749,11 +853,11 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
         );
         return targetWeekStart.difference(anchorWeekStart).inDays ~/ 7;
       case _AnalyticsBarChartPeriod.monthly:
-        final anchorMonth = DateTime(anchorDate.year, anchorDate.month, 1);
-        final targetMonth = DateTime(visibleStart.year, visibleStart.month, 1);
+        final anchorMonth = _resolveAnalyticsMonthWindow(anchorDate).start;
+        final targetMonth = _resolveAnalyticsMonthWindow(visibleStart).start;
         return _analyticsMonthDelta(targetMonth, anchorMonth);
       case _AnalyticsBarChartPeriod.yearly:
-        return visibleStart.year - anchorDate.year;
+        return _analyticsYearDelta(visibleStart, anchorDate);
     }
   }
 
@@ -953,7 +1057,7 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     Iterable<Transaction> transactions,
   ) {
     final anchorDate = _resolveAnalyticsChartAnchorDate(transactions);
-    return DateTime(anchorDate.year, anchorDate.month, 1);
+    return _resolveAnalyticsMonthWindow(anchorDate).start;
   }
 
   _AnalyticsCategoryChartPage _buildAnalyticsCategoryChartPage({
@@ -964,23 +1068,7 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     int periodOffset = 0,
   }) {
     final anchorMonth = _resolveAnalyticsChartAnchorMonth(transactions);
-    DateTime targetMonth;
-    try {
-      final isEC = context.read<ThemeProvider>().appCalendar == AppCalendarOption.ethiopian;
-      if (isEC) {
-        final ec = Kenat.fromGregorian(anchorMonth.year, anchorMonth.month, anchorMonth.day).getEthiopian();
-        var y = ec['year']!;
-        var m = ec['month']! + periodOffset;
-        while (m > 13) { m -= 13; y++; }
-        while (m < 1) { m += 13; y--; }
-        final gc = Kenat.fromEthiopian(y, m, 1).getGregorian();
-        targetMonth = DateTime(gc['year']!, gc['month']!, gc['day']!);
-      } else {
-        targetMonth = DateTime(anchorMonth.year, anchorMonth.month + periodOffset, 1);
-      }
-    } catch (_) {
-      targetMonth = DateTime(anchorMonth.year, anchorMonth.month + periodOffset, 1);
-    }
+    final targetMonth = _shiftAnalyticsMonth(anchorMonth, periodOffset);
 
     final snapshot = _buildAnalyticsSnapshot(
       provider,
@@ -1018,8 +1106,12 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     required int periodOffset,
   }) {
     final anchorDate = _resolveAnalyticsChartAnchorDate(transactions);
-    final shiftedAnchor =
-        _shiftAnalyticsLineAnchorDate(anchorDate, period, periodOffset);
+    final shiftedAnchor = _shiftAnalyticsLineAnchorDate(
+      anchorDate,
+      period,
+      periodOffset,
+      context: context,
+    );
 
     switch (period) {
       case _AnalyticsLineChartPeriod.weekly:
@@ -1031,12 +1123,18 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
           endExclusive: start.add(const Duration(days: 7)),
         );
       case _AnalyticsLineChartPeriod.monthly:
+        if (_usesEthiopianCalendar) {
+          return _resolveAnalyticsMonthWindow(shiftedAnchor);
+        }
         final start = DateTime(shiftedAnchor.year, shiftedAnchor.month, 1);
         return _AnalyticsDateWindow(
           start: start,
           endExclusive: DateTime(start.year, start.month + 1, 1),
         );
       case _AnalyticsLineChartPeriod.yearly:
+        if (_usesEthiopianCalendar) {
+          return _resolveAnalyticsYearWindow(shiftedAnchor);
+        }
         final start = DateTime(shiftedAnchor.year, 1, 1);
         return _AnalyticsDateWindow(
           start: start,
@@ -1083,8 +1181,12 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     required int periodOffset,
   }) {
     final anchorDate = _resolveAnalyticsChartAnchorDate(transactions);
-    final shiftedAnchor =
-        _shiftAnalyticsBarAnchorDate(anchorDate, period, periodOffset);
+    final shiftedAnchor = _shiftAnalyticsBarAnchorDate(
+      anchorDate,
+      period,
+      periodOffset,
+      context: context,
+    );
 
     switch (period) {
       case _AnalyticsBarChartPeriod.weekly:
@@ -1096,12 +1198,18 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
           endExclusive: start.add(const Duration(days: 7)),
         );
       case _AnalyticsBarChartPeriod.monthly:
+        if (_usesEthiopianCalendar) {
+          return _resolveAnalyticsMonthWindow(shiftedAnchor);
+        }
         final start = DateTime(shiftedAnchor.year, shiftedAnchor.month, 1);
         return _AnalyticsDateWindow(
           start: start,
           endExclusive: DateTime(start.year, start.month + 1, 1),
         );
       case _AnalyticsBarChartPeriod.yearly:
+        if (_usesEthiopianCalendar) {
+          return _resolveAnalyticsYearWindow(shiftedAnchor);
+        }
         final start = DateTime(shiftedAnchor.year, 1, 1);
         return _AnalyticsDateWindow(
           start: start,
@@ -1256,19 +1364,20 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
             1,
           );
         }
+        final monthWindow = _resolveAnalyticsMonthWindow(targetMonth);
         return _AnalyticsSupportContext(
           transactions: _transactionsWithinDateWindow(
             filteredTransactions,
-            start: targetMonth,
-            endExclusive: DateTime(targetMonth.year, targetMonth.month + 1, 1),
+            start: monthWindow.start,
+            endExclusive: monthWindow.endExclusive,
           ),
           periodLabel: _formatAnalyticsChartPeriodLabel(context: context, 
             filter: filter,
-            fallbackMonthDate: targetMonth,
+            fallbackMonthDate: monthWindow.start,
             expandedForDateRange: true,
           ),
           periodKey:
-              'bubble-${filter.mode.name}-${targetMonth.year}-${targetMonth.month}',
+              'bubble-${filter.mode.name}-${monthWindow.start.year}-${monthWindow.start.month}',
           showIncome: filter.mode == _AnalyticsHeatmapMode.income,
         );
       case _AnalyticsChartSection.lineChart:
@@ -1379,18 +1488,19 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
             1,
           );
         }
+        final monthWindow = _resolveAnalyticsMonthWindow(targetMonth);
         return _AnalyticsSupportContext(
           transactions: _transactionsWithinDateWindow(
             filteredTransactions,
-            start: targetMonth,
-            endExclusive: DateTime(targetMonth.year, targetMonth.month + 1, 1),
+            start: monthWindow.start,
+            endExclusive: monthWindow.endExclusive,
           ),
           periodLabel: _formatAnalyticsChartPeriodLabel(context: context, 
             filter: filter,
-            fallbackMonthDate: targetMonth,
+            fallbackMonthDate: monthWindow.start,
           ),
           periodKey:
-              'pie-${filter.mode.name}-${targetMonth.year}-${targetMonth.month}',
+              'pie-${filter.mode.name}-${monthWindow.start.year}-${monthWindow.start.month}',
           showIncome: filter.mode == _AnalyticsHeatmapMode.income,
         );
     }
@@ -2330,8 +2440,10 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     }
 
     final anchor = anchorDate ?? latestTransactionTime ?? DateTime.now();
-    final monthStart = DateTime(anchor.year, anchor.month, 1);
-    final nextMonthStart = DateTime(anchor.year, anchor.month + 1, 1);
+    final monthWindow = _resolveAnalyticsMonthWindow(anchor);
+    final monthStart = monthWindow.start;
+    final nextMonthStart = monthWindow.endExclusive;
+    final isEthiopianCalendar = _usesEthiopianCalendar;
 
     final byDayIncome = <int, double>{};
     final byDayExpense = <int, double>{};
@@ -2351,12 +2463,19 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
     var largestDeposit = 0.0;
 
     for (final transaction in transactions) {
-      totalTransactions += 1;
-      totalFees +=
-          (transaction.serviceCharge ?? 0.0) + (transaction.vat ?? 0.0);
       final isCredit = transaction.type == 'CREDIT';
       final isDebit = transaction.type == 'DEBIT';
       final dt = _parseTransactionTime(transaction.time);
+      final isWithinAnchorMonth =
+          dt != null && !dt.isBefore(monthStart) && dt.isBefore(nextMonthStart);
+
+      if (constrainSeriesToAnchorMonth && !isWithinAnchorMonth) {
+        continue;
+      }
+
+      totalTransactions += 1;
+      totalFees +=
+          (transaction.serviceCharge ?? 0.0) + (transaction.vat ?? 0.0);
 
       final isSelfTransfer =
           isDebit ? provider.isSelfTransfer(transaction) : false;
@@ -2387,38 +2506,37 @@ class RedesignMoneyPageState extends State<RedesignMoneyPage>
       }
 
       if (dt == null) continue;
-      final isWithinAnchorMonth =
-          !dt.isBefore(monthStart) && dt.isBefore(nextMonthStart);
 
-      if (!constrainSeriesToAnchorMonth || isWithinAnchorMonth) {
-        final day = dt.day;
+      final day = isEthiopianCalendar
+          ? Kenat.fromGregorian(dt.year, dt.month, dt.day)
+              .getEthiopian()['day']!
+          : dt.day;
 
-        if (isCredit) {
-          byDayIncome[day] = (byDayIncome[day] ?? 0.0) + transaction.amount;
-          byDayNet[day] = (byDayNet[day] ?? 0.0) + transaction.amount;
-        } else if (isDebit) {
-          byDayExpense[day] = (byDayExpense[day] ?? 0.0) + transaction.amount;
-          byDayNet[day] = (byDayNet[day] ?? 0.0) - transaction.amount;
-        }
+      if (isCredit) {
+        byDayIncome[day] = (byDayIncome[day] ?? 0.0) + transaction.amount;
+        byDayNet[day] = (byDayNet[day] ?? 0.0) + transaction.amount;
+      } else if (isDebit) {
+        byDayExpense[day] = (byDayExpense[day] ?? 0.0) + transaction.amount;
+        byDayNet[day] = (byDayNet[day] ?? 0.0) - transaction.amount;
+      }
 
-        final includeBubbleCategory =
-            categoryMode == _AnalyticsHeatmapMode.income ? isCredit : isDebit;
-        final skipBubbleCategory = categoryMode == _AnalyticsHeatmapMode.income
-            ? isMisc
-            : isSelfTransfer || isMisc;
+      final includeBubbleCategory =
+          categoryMode == _AnalyticsHeatmapMode.income ? isCredit : isDebit;
+      final skipBubbleCategory = categoryMode == _AnalyticsHeatmapMode.income
+          ? isMisc
+          : isSelfTransfer || isMisc;
 
-        if (includeBubbleCategory && !skipBubbleCategory) {
-          final categoryName = (category?.name.trim().isNotEmpty ?? false)
-              ? category!.name.trim()
-              : 'Other';
-          categoryTotals[categoryName] =
-              (categoryTotals[categoryName] ?? 0.0) + transaction.amount;
-        }
+      if (includeBubbleCategory && !skipBubbleCategory) {
+        final categoryName = (category?.name.trim().isNotEmpty ?? false)
+            ? category!.name.trim()
+            : 'Other';
+        categoryTotals[categoryName] =
+            (categoryTotals[categoryName] ?? 0.0) + transaction.amount;
+      }
 
-        if (isDebit && !isSelfTransfer && !isMisc) {
-          final weekdayIndex = dt.weekday % 7; // Sunday = 0 ... Saturday = 6
-          weekdayExpenseTotals[weekdayIndex] += transaction.amount;
-        }
+      if (isDebit && !isSelfTransfer && !isMisc) {
+        final weekdayIndex = dt.weekday % 7; // Sunday = 0 ... Saturday = 6
+        weekdayExpenseTotals[weekdayIndex] += transaction.amount;
       }
     }
 
@@ -4086,8 +4204,12 @@ List<String> _analyticsWeekdayLabels(BuildContext context, {bool short = false})
       .toList(growable: false);
 }
 
-String _analyticsWeekdayLabel(BuildContext context, int index) {
-  final labels = _analyticsWeekdayLabels(context);
+String _analyticsWeekdayLabel(
+  BuildContext context,
+  int index, {
+  bool short = false,
+}) {
+  final labels = _analyticsWeekdayLabels(context, short: short);
   return labels[index.clamp(0, labels.length - 1)];
 }
 
@@ -5683,7 +5805,7 @@ class _AnalyticsHeatmapCardState extends State<_AnalyticsHeatmapCard> {
                       final valuesByBucket =
                           widget.view == _AnalyticsHeatmapView.daily
                               ? _buildDailyValues(pageMonth)
-                              : _buildMonthlyValues(pageMonth.year);
+                              : _buildMonthlyValues(pageMonth);
                       final maxMagnitude = valuesByBucket.values.fold<double>(
                         0.0,
                         (currentMax, value) =>
@@ -6220,9 +6342,16 @@ class _AnalyticsHeatmapCardState extends State<_AnalyticsHeatmapCard> {
     return values;
   }
 
-  Map<int, double> _buildMonthlyValues(int year) {
+  Map<int, double> _buildMonthlyValues(DateTime visibleMonth) {
     final values = <int, double>{};
     final isEC = Provider.of<ThemeProvider>(context, listen: false).appCalendar == AppCalendarOption.ethiopian;
+    final targetEcYear = isEC
+        ? Kenat.fromGregorian(
+            visibleMonth.year,
+            visibleMonth.month,
+            visibleMonth.day,
+          ).getEthiopian()['year']
+        : null;
 
     for (final transaction in widget.transactions) {
       final dt = _parseTransactionTime(transaction.time);
@@ -6230,12 +6359,12 @@ class _AnalyticsHeatmapCardState extends State<_AnalyticsHeatmapCard> {
 
       if (isEC) {
         final ec = Kenat.fromGregorian(dt.year, dt.month, dt.day).getEthiopian();
-        if (ec['year'] != year) continue;
+        if (ec['year'] != targetEcYear) continue;
         final delta = _heatmapDelta(transaction);
         if (delta.abs() < 0.001) continue;
         values[ec['month']!] = (values[ec['month']!] ?? 0.0) + delta;
       } else {
-        if (dt.year != year) continue;
+        if (dt.year != visibleMonth.year) continue;
         final delta = _heatmapDelta(transaction);
         if (delta.abs() < 0.001) continue;
         values[dt.month] = (values[dt.month] ?? 0.0) + delta;
@@ -6255,7 +6384,7 @@ class _AnalyticsHeatmapCardState extends State<_AnalyticsHeatmapCard> {
     final isEC = Provider.of<ThemeProvider>(context, listen: false).appCalendar == AppCalendarOption.ethiopian;
     if (isEC) {
       final ec = Kenat.fromGregorian(visibleMonth.year, visibleMonth.month, visibleMonth.day).getEthiopian();
-      final grid = MonthGrid({'year': ec['year'], 'month': ec['month'], 'weekStart': 0}).generate();
+      final grid = MonthGrid({'year': ec['year'], 'month': ec['month'], 'weekStart': 1}).generate();
       final List<Map<String, dynamic>?> days = List<Map<String, dynamic>?>.from(grid['days']);
       const totalCells = 42;
 
@@ -9335,7 +9464,11 @@ class _AnalyticsSpendingByDayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final maxValue = snapshot.weekdayExpenseTotals.fold<double>(0.0, math.max);
-    final peakDay = _analyticsWeekdayLabel(context, snapshot.peakWeekdayIndex);
+    final peakDay = _analyticsWeekdayLabel(
+      context,
+      snapshot.peakWeekdayIndex,
+      short: true,
+    );
     final periodLabel = snapshot.periodLabel;
     final periodKey = snapshot.periodKey;
     final infoText = maxValue > 0 ? 'Peak: $peakDay' : snapshot.emptyLabel;
@@ -9545,7 +9678,11 @@ class _AnalyticsSpendingByDayCard extends StatelessWidget {
                                           : FontWeight.w600,
                                     ),
                                     child: Text(
-                                      _analyticsWeekdayLabel(context, index),
+                                      _analyticsWeekdayLabel(
+                                        context,
+                                        index,
+                                        short: true,
+                                      ),
                                     ),
                                   ),
                                 ],
